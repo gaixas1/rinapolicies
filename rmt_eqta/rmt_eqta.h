@@ -57,7 +57,7 @@ struct eqta_instance {
 	struct rmt_n1_port * P;
 	
 	///ps related
-	timespec lastT;	// "Time" of last call
+	struct timespec lastT;	// "Time" of last call
 	struct ps_data_t * ps; // ps modules, len == eqta_config.num_ps
 	
 	///Mux related
