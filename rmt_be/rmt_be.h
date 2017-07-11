@@ -21,6 +21,7 @@ struct q_entry {
 
 // port instance information
 struct port_instance {
+	struct list_head L;
 	struct rmt_n1_port * P;
 	uint_t count;
 	struct list_head Q;
@@ -40,7 +41,7 @@ static void be_destroy(struct ps_base * bps);
 
 void * be_q_create_p(struct rmt_ps *ps, struct rmt_n1_port * P);
 int be_q_destroy_p(struct rmt_ps *ps, struct rmt_n1_port * P);
-int be_enqueue_p(struct rmt_ps *ps, struct rmt_n1_port * P, struct pdu *pdu);
+int be_enqueue_p(struct rmt_ps *ps, struct rmt_n1_port * P, struct pdu * PDU);
 struct pdu * be_dequeue_p(struct rmt_ps *ps, struct rmt_n1_port * P);
 
 static int be_p_set_param(struct ps_base * bps, const char * name, const char * value);
@@ -53,11 +54,11 @@ int free_q_entry(struct be_config * base, struct q_entry * entry);
 
 void free_port_instance(struct port_instance * entry);
 
-__always_inline struct port_instance * search_port_instance(list_head * L, rmt_n1_port * P) {
-	port_instance *  be_e = NULL;
+__always_inline struct port_instance * search_port_instance(struct list_head * L, struct rmt_n1_port * P) {
+	struct port_instance *  be_e = NULL;
 	list_for_each_entry(be_e, L, L) {
 		if (P == be_e->P) {
-			return P; 
+			return be_e; 
 		}
 	}
 	return NULL;

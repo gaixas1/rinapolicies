@@ -1,5 +1,5 @@
 ifndef KREL
-KREL=`uname -r`
+KREL=4.9.0-0.bpo.3-amd64
 endif
 
 ifndef KDIR
@@ -7,13 +7,14 @@ KDIR=/lib/modules/$(KREL)/build
 endif
 
 ifndef IRATI_KSDIR
-IRATI_KSDIR=${PWD}/../../kernel
+IRATI_KSDIR=/root/stack/kernel
 endif
 
-ccflags-y = -Wtype-limits -I${src}/../../kernel
+ccflags-y = -Wtype-limits -I/root/stack/kernel
 
 obj-m := rmt_be-plugin.o
-rmt_eqta-plugin-y := rmt_be.o
+rmt_be-plugin-y := rmt_be.o
+
 
 all:
 	$(MAKE) -C $(KDIR) KBUILD_EXTRA_SYMBOLS=${IRATI_KSDIR}/Module.symvers M=$$PWD
