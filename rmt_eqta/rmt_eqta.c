@@ -142,7 +142,7 @@ int eqta_enqueue_p(struct rmt_ps *ps, struct rmt_n1_port * P, struct pdu *pdu) {
 			LOG_INFO("Length exceeded for Mux, dropping PDU");
 			pdu_destroy(pdu);
 			///Record dropped stats??
-			return RMT_ps_ENQ_DROP;
+			return RMT_PS_ENQ_DROP;
 		}
 	} else {
 		//To PS
@@ -150,7 +150,7 @@ int eqta_enqueue_p(struct rmt_ps *ps, struct rmt_n1_port * P, struct pdu *pdu) {
 			LOG_INFO("Length exceeded for PS id %u, dropping PDU", PS_id);
 			pdu_destroy(pdu);
 			///Record dropped stats??
-			return RMT_ps_ENQ_DROP;
+			return RMT_PS_ENQ_DROP;
 		}
 	}	
 	
@@ -159,18 +159,18 @@ int eqta_enqueue_p(struct rmt_ps *ps, struct rmt_n1_port * P, struct pdu *pdu) {
 		LOG_INFO("Length exceeded for port occupation, dropping PDU");
 		pdu_destroy(pdu);
 		///Record dropped stats??
-		return RMT_ps_ENQ_DROP;
+		return RMT_PS_ENQ_DROP;
 	}
 	
 	struct q_entry * e = get_q_entry(qta_ps);
 	if(!e) {
 		LOG_ERR("Cannot allocate buffer, dropping PDU");
 		pdu_destroy(pdu);
-		return RMT_ps_ENQ_DROP;
+		return RMT_PS_ENQ_DROP;
 	}
-	e->data = pud;
+	e->data = pdu;
 	e->weight = (uint_t) pdu_len(pdu);
-	INIT_LIST_HEAD(e);
+	INIT_LIST_HEAD(&e->L);
 	
 	if(PS_id < 0) {
 		//Insert PDU into MUX queue
@@ -182,8 +182,6 @@ int eqta_enqueue_p(struct rmt_ps *ps, struct rmt_n1_port * P, struct pdu *pdu) {
 		PS_i->count++;
 	}
 		
-	struct qta_queue_set * qset = P->rmt_ps_queues;
-	qset->occupation++;
 
 	LOG_DBG("PDU enqueued");
 	return RMT_ps_ENQ_SCHED;
@@ -223,7 +221,6 @@ struct pdu * eqta_dequeue_p(struct rmt_ps * ps, struct rmt_n1_port * P) {
 		eqta_e->lastT = t1;
 	}
 	struct q_entry * entry = NULL;
-	struct qta_queue_set * qset = P->rmt_ps_queues;
 	
 	//For each PS
 	// - Give credits for T ticks
@@ -247,10 +244,10 @@ struct pdu * eqta_dequeue_p(struct rmt_ps * ps, struct rmt_n1_port * P) {
 				if(eqta_e->mux_count >= cherish_max_count) {
 					LOG_INFO("Length exceeded for MUX queue for cherish %u, dropping PDU", ps_conf->cherish_level);
 					pdu_destroy(entry->pdu);
-					free_q_entry(ps_conf, entry);
+					free_q_entry(base_conf, entry);
 					qset->occupation--;
 				} else {
-					INIT_LIST_HEAD(entry);
+					INIT_LIST_HEAD(&entry->L);
 					list_add_tail(&entry->L, eqta_e->Qs+mux_urgency);
 					eqta_e->mux_count++;
 				}
@@ -269,10 +266,10 @@ struct pdu * eqta_dequeue_p(struct rmt_ps * ps, struct rmt_n1_port * P) {
 				if(dst_PS_i->count >= dst_max_count) {
 					LOG_INFO("Length exceeded for dst PS (id %u), dropping PDU", ps_conf->next_module);
 					pdu_destroy(entry->pdu);
-					free_q_entry(ps_conf, entry);
+					free_q_entry(base_conf, entry);
 					qset->occupation--;
 				} else {
-					INIT_LIST_HEAD(entry);
+					INIT_LIST_HEAD(&entry->L);
 					list_add_tail(&entry->L, &dst_PS_i->Q);
 					dst_PS_i->count++;
 				}
@@ -281,13 +278,13 @@ struct pdu * eqta_dequeue_p(struct rmt_ps * ps, struct rmt_n1_port * P) {
 	}
 	
 	//Get next from MUX
-	uint_t levels_urgency = ps_conf->levels_urgency;
+	uint_t levels_urgency = base_conf->levels_urgency;
 	for(uint_t i = 0; i < levels_urgency; i++) {
 		if(!list_empty(eqta_e->Qs+i)) {
-			entry = list_first_entry(&ps_i->Q, struct q_entry, L);
+			entry = list_first_entry(eqta_e->Qs+i, struct q_entry, L);
 			list_del(&entry->L);
 			PDU * pdu = entry->pdu;
-			free_q_entry(ps_conf, entry);
+			free_q_entry(base_conf, entry);
 			return pdu;
 		}
 	}
@@ -345,6 +342,7 @@ void * eqta_q_create_p(struct rmt_ps *ps, struct rmt_n1_port * P) {
 		INIT_LIST_HEAD(eqta_e->Qs+i);
 	}
 	
+	entry->P->rmt_ps_queues = (void*)eqta_e;
 	return eqta_e;
 }
 

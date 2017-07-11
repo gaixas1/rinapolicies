@@ -1,0 +1,11 @@
+{
+        "PluginName": "rmt_be-plugin",
+        "PluginVersion": "1",
+        "PolicySets" : [
+                {
+                        "Name": "rmt_be-ps",
+                        "Component": "rmt",
+                        "Version" : "1"
+                }
+        ]
+}
