@@ -3,9 +3,15 @@
 #define RINA_BE_PS_NAME "rmt_be-ps_i"
 #include "rmt_be.h"
 
-/* Main functions */
+MODULE_DESCRIPTION("RMT BE policy set");
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Sergio Leon <gaixas1@gmail.com>");
 
-static struct ps_base * policy_create(struct rina_component * component){
+/// Main functions
+
+
+static struct ps_base * f_policy_create(struct rina_component * component){
+	
 	struct rmt * rmt_i;
 	struct rmt_ps * ps_i;
 	struct rmt_config * rmt_cfg;
@@ -28,28 +34,29 @@ static struct ps_base * policy_create(struct rina_component * component){
 	INIT_LIST_HEAD(&conf->port_L);
 	INIT_LIST_HEAD(&conf->buffer_L);
 
-	ps_i->base.set_policy_set_param = set_policy_set_param;
+	ps_i->base.set_policy_set_param = f_set_policy_set_param;
 	ps_i->dm = rmt_i;
 	ps_i->priv = conf;
 
 	rmt_cfg = rmt_config_get(rmt_i);
 	if (rmt_cfg) {
-		policy_for_each(rmt_cfg->policy_set, conf, policy_base_config_apply);
+		policy_for_each(rmt_cfg->policy_set, conf, f_policy_base_config_apply);
 	} else {
 		LOG_WARN("Using default config (100 buffers)");
 	}
-	
-	ps_i->rmt_q_create_policy = rmt_q_create_policy;
-	ps_i->rmt_q_destroy_policy = rmt_q_destroy_policy;
-	ps_i->rmt_enqueue_policy = rmt_enqueue_policy;
-	ps_i->rmt_dequeue_policy = rmt_dequeue_policy;
+
+	ps_i->rmt_q_create_policy = f_rmt_q_create_policy;
+	ps_i->rmt_q_destroy_policy = f_rmt_q_destroy_policy;
+	ps_i->rmt_enqueue_policy = f_rmt_enqueue_policy;
+	ps_i->rmt_dequeue_policy = f_rmt_dequeue_policy;
 
 	LOG_INFO("Loaded BE MUX policy set and its configuration");
 
 	return &ps_i->base;
 }
 
-static void policy_destroy(struct ps_base * bps) {
+static void f_policy_destroy(struct ps_base * bps) {
+	
 	struct rmt_ps * ps_i;
 	struct base_config * conf;
 	struct port_instance * port_i;
@@ -71,7 +78,7 @@ static void policy_destroy(struct ps_base * bps) {
 	// Delete all remaining port instances
 	while(!list_empty(&conf->port_L)) {
 		port_i = list_first_entry(&conf->port_L, struct port_instance, L);
-		free_port_instance(port_i);
+		f_free_port_instance(port_i);
 	}
 	
 	// Empty buffers
@@ -86,7 +93,7 @@ static void policy_destroy(struct ps_base * bps) {
 }
 
 
-int rmt_enqueue_policy(struct rmt_ps *ps_i, struct rmt_n1_port * P, struct pdu *PDU) {
+int f_rmt_enqueue_policy(struct rmt_ps *ps_i, struct rmt_n1_port * P, struct pdu *PDU) {
 	struct base_config * conf;
 	struct port_instance * port_i;
 	struct q_entry * entry_i;
@@ -135,7 +142,7 @@ int rmt_enqueue_policy(struct rmt_ps *ps_i, struct rmt_n1_port * P, struct pdu *
 	return RMT_PS_ENQ_SCHED;
 }
 
-struct pdu * rmt_dequeue_policy(struct rmt_ps * ps_i, struct rmt_n1_port * P) {
+struct pdu * f_rmt_dequeue_policy(struct rmt_ps * ps_i, struct rmt_n1_port * P) {
 	struct base_config * conf;
 	struct port_instance * port_i;
 	struct pdu * PDU;
@@ -166,7 +173,7 @@ struct pdu * rmt_dequeue_policy(struct rmt_ps * ps_i, struct rmt_n1_port * P) {
 	return NULL;
 }
 
-void * rmt_q_create_policy(struct rmt_ps *ps_i, struct rmt_n1_port * P) {
+void * f_rmt_q_create_policy(struct rmt_ps *ps_i, struct rmt_n1_port * P) {
 	struct base_config * config;
 	struct port_instance * port_i;
 		
@@ -179,7 +186,7 @@ void * rmt_q_create_policy(struct rmt_ps *ps_i, struct rmt_n1_port * P) {
 	
 	if(P->rmt_ps_queues) {
 		LOG_WARN("Try to create port queues for an already set port");
-		return port_i;
+		return (struct port_instance *) P->rmt_ps_queues;
 	}
 	
 	port_i = kzalloc(sizeof(struct port_instance), GFP_ATOMIC);
@@ -199,35 +206,35 @@ void * rmt_q_create_policy(struct rmt_ps *ps_i, struct rmt_n1_port * P) {
 	return port_i;
 }
 
-int rmt_q_destroy_policy(struct rmt_ps *ps_i, struct rmt_n1_port * P) {
+int f_rmt_q_destroy_policy(struct rmt_ps *ps_i, struct rmt_n1_port * P) {
 	if(!P->rmt_ps_queues) {
 		LOG_ERR("Unknown rmt_port for rmt_destroy_p_policy");
 		return -1;
 	}
 	
-	free_port_instance((struct port_instance *) P->rmt_ps_queues);
+	f_free_port_instance((struct port_instance *) P->rmt_ps_queues);
 	return 0;
 }
 
 
-/* Helper functions */
+/// Helper functions
 
-static int policy_base_config_apply(struct policy_parm * param, void * data) {
+static int f_policy_base_config_apply(struct policy_parm * param, void * data) {
 	struct base_config * conf;
 
 	conf = (struct base_config *) data;
-	return policy_set_param_pv(conf, policy_param_name(param), policy_param_value(param));
+	return f_policy_set_param_pv(conf, policy_param_name(param), policy_param_value(param));
 }
 
-static int set_policy_set_param(struct ps_base * bps, const char * name, const char * value) {
+static int f_set_policy_set_param(struct ps_base * bps, const char * name, const char * value) {
 	struct rmt_ps * ps_i;
 	
 	ps_i = container_of(bps, struct rmt_ps, base);
-	return policy_set_param_pv((struct base_config *) ps_i->priv, name, value);
+	return f_policy_set_param_pv((struct base_config *) ps_i->priv, name, value);
 }
 
 
-static int policy_set_param_pv(struct base_config * data, const char * name, const char * value) {
+static int f_policy_set_param_pv(struct base_config * data, const char * name, const char * value) {
 	int v;
 		
 	if (!name) {
@@ -252,7 +259,7 @@ static int policy_set_param_pv(struct base_config * data, const char * name, con
 	return 1;
 }
 
-void free_port_instance(struct port_instance * port_i) {
+void f_free_port_instance(struct port_instance * port_i) {
 	struct q_entry * entry_i;
 		
 	port_i->P->rmt_ps_queues = NULL;
@@ -268,13 +275,12 @@ void free_port_instance(struct port_instance * port_i) {
 }
 
 
-/*
-	Policy init and exit
-*/
+/// Policy init and exit
+
 static struct ps_factory qta_factory = {
 		.owner = THIS_MODULE,
-		.create = policy_create,
-		.destroy = policy_destroy,
+		.create = f_policy_create,
+		.destroy = NULL,//f_policy_destroy,
 };
 
 static int __init mod_init(void) {
@@ -297,7 +303,3 @@ static void __exit mod_exit(void) {
 
 module_init(mod_init);
 module_exit(mod_exit);
-
-MODULE_DESCRIPTION("RMT BE policy set");
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Sergio Leon <gaixas1@gmail.com>");
