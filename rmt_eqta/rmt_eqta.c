@@ -1,423 +1,431 @@
 //rmt_eqta.c
 #define RINA_PREFIX "rmt_eqta-plugin"
 #define RINA_QTA_MUX_ps_NAME "rmt_eqta-ps"
-#include rmt_eqta.h
+#include "rmt_eqta.h"
+
+
+MODULE_DESCRIPTION("RMT QTA MUX policy set");
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Sergio Leon <gaixas1@gmail.com>");
 
 /* Main functions */
 
-static struct ps_base * eqta_create(struct rina_component * component){
-	struct rmt * rmt = rmt_from_component(component);
-	struct rmt_ps * ps = rkzalloc(sizeof(*ps), GFP_ATOMIC);
-	struct eqta_config * data;
+static struct ps_base * f_policy_create(struct rina_component * component){
+	struct rmt * rmt; 
+	struct rmt_ps * ps;
 	struct rmt_config * rmt_cfg;
+	base_config * conf;
 
+	rmt = rmt_from_component(component);
+	ps = rkzalloc(sizeof(*ps), GFP_ATOMIC);
 	if (!ps) {
 		return NULL;
 	}
 	
-	struct eqta_config * base_conf = kzalloc(sizeof(struct eqta_config), GFP_ATOMIC);
-	if (!base_conf) {
-		LOG_ERR("Could not create config queue");
+	conf = kzalloc(sizeof(base_config), GFP_ATOMIC);
+	if (!conf) {
+		LOG_ERR("Could not create conf queue");
 		return NULL;
 	}
-	INIT_LIST_HEAD(&base_conf->q_entry_L);
-	base_conf->q_entry_buffer_size = 0;
 		
-	INIT_LIST_HEAD(&base_conf->Qos2ps_L);
-	INIT_LIST_HEAD(&base_conf->eqta_instance_L);
+	INIT_LIST_HEAD(&conf->buffer);
+	INIT_LIST_HEAD(&conf->qos2modules);
+	INIT_LIST_HEAD(&conf->port_instances);
+	
+	conf->state = 0;
+	conf->headers_weight = 0;
+	conf->num_policers = 0;
+	conf->levels_urgency = 1;
+	conf->bytecost = 1;
+	conf->max_count = 100;
+	conf->global_max_count = 100;
+	conf->buffer_size = 0;
+	conf->policers = NULL;
 
-	ps->base.set_policy_set_param = eqta_p_set_param;
+	ps->base.set_policy_set_param = f_set_policy_set_param;
 	ps->dm = rmt;
-	ps->priv = base_conf;
+	ps->priv = conf;
 
 	rmt_cfg = rmt_config_get(rmt);
 	if (rmt_cfg) {
-		policy_for_each(rmt_cfg->policy_set, data, eqta_config_apply);
+		policy_for_each(rmt_cfg->policy_set, conf, f_policy_base_config_apply);
 	} else {
-		base_conf->headers_weight = 0;
-		base_conf->num_ps = 0;
-		base_conf->levels_cherish = 1;
-		base_conf->levels_urgency = 1;
-		base_conf->max_count = 100;
-		base_conf->cherish_thresholds = kzalloc(sizeof(uint_t), GFP_ATOMIC);
-		if(base_conf->cherish_thresholds =! NULL) {
-			base_conf->cherish_thresholds[0] = 100;
-		}
-		base_conf->ps = NULL;
-		LOG_WARN("Using default config (best-effort)");
+		LOG_WARN("Using default conf (best-effort)");
 	}
 	
-	if(!base_conf->cherish_thresholds || ( base_conf->num_ps > 0 && !base_conf->ps)) {
-		LOG_ERR("Could not configure queues");
-		if(base_conf->cherish_thresholds) {
-			rkfree(base_conf->cherish_thresholds);
-		}
-		if(base_conf->ps) {
-			rkfree(base_conf->ps);
-		}
-		rkfree(base_conf);
+	conf->state |= 1;
+	
+	if(conf->num_policers > 0 && !conf->policers) {
+		rkfree(conf);
 		return NULL;
 	}
 
-	ps->rmt_q_create_policy = eqta_q_create_p;
-	ps->rmt_q_destroy_policy = eqta_q_destroy_p;
-	ps->rmt_enqueue_policy = eqta_enqueue_p;
-	ps->rmt_dequeue_policy = eqta_dequeue_p;
+	ps->rmt_q_create_policy = f_rmt_q_create_policy;
+	ps->rmt_q_destroy_policy = f_rmt_q_destroy_policy;
+	ps->rmt_enqueue_policy = f_rmt_enqueue_policy;
+	ps->rmt_dequeue_policy = f_rmt_dequeue_policy;
 
-	LOG_INFO("Loaded QTA MUX policy set and its configuration");
+	LOG_INFO("Loaded QTA MUX policy set and its confuration");
 
 	return &ps->base;
 }
 
-static void eqta_destroy(struct ps_base * bps) {
-	struct rmt_ps *ps = container_of(bps, struct rmt_ps, base);
+static void f_policy_destroy(struct ps_base * bps) {
+	struct rmt_ps *ps;
+	base_config * conf;
+	port_instance * port_i;
+	q_entry * entry_i;
+	qos2module * qos2module_i;
+	
+	ps = container_of(bps, struct rmt_ps, base);
 	if (!bps || !ps || !ps->priv) {
 		LOG_ERR("Error on rmt policy destroy. Some modules not set.");
 		return;
 	}
 	
-	struct eqta_config * base_conf = ps->priv;
+	conf = (base_config *) ps->priv;
 	
 	// Delete all remaining port instances
-	while(!empty_list(&base_conf->eqta_instance_L)) {
-		struct eqta_instance * entry;
-		entry = list_first_entry(&base_conf->q_entry_L, struct q_entry, L);
-		free_port_instance(entry);
+	while(!list_empty(&conf->port_instances)) {
+		port_i = list_first_entry(&conf->port_instances, port_instance, L);
+		f_free_port_instance(conf, port_i);
 	}
 	
 	// Empty buffers
-	while(!empty_list(&base_conf->q_entry_L)) {
-		struct q_entry * entry;
-		entry = list_first_entry(&base_conf->q_entry_L, struct q_entry, L);
-		list_del(&entry->L);
-		rkfree(entry);
+	while(!list_empty(&conf->buffer)) {
+		entry_i = list_first_entry(&conf->buffer, q_entry, L);
+		list_del(&entry_i->L);
+		rkfree(entry_i);
+		conf->buffer_size--;
 	}
 	
-	//Remove qos 2 PS mapping
-	while(!empty_list(&base_conf->Qos2ps_L)) {
-		struct qos2ps_t * entry;
-		entry = list_first_entry(&base_conf->Qos2ps_L, struct qos2ps_t, L);
-		list_del(&entry->L);
-		rkfree(entry);
+	//Remove qos 2 module mapping
+	while(!list_empty(&conf->qos2modules)) {
+		qos2module_i = list_first_entry(&conf->qos2modules, qos2module, L);
+		list_del(&qos2module_i->L);
+		rkfree(qos2module_i);
 	}
 	
 	// Delete base structures
-	if(base_conf->cherish_thresholds) {
-		rkfree(base_conf->cherish_thresholds);
+	if(conf->policers) {
+		rkfree(conf->policers);
 	}
-	if(base_conf->ps) {
-		rkfree(base_conf->ps);
-	}
-	rkfree(base_conf);
+	rkfree(conf);
 }
 
-
-int eqta_enqueue_p(struct rmt_ps *ps, struct rmt_n1_port * P, struct pdu *pdu) {
-	if (!ps || !ps->priv || !P || !pdu) {
+int f_rmt_enqueue_policy(struct rmt_ps *ps, port_p P, pdu_p pdu_i) {
+	const struct pci * pci_i;
+	qos_id_t qos_id;
+	base_config * conf;
+	u8 next_module, def_urgency;
+	u16 def_cherish_th;
+	qos2module * qos2module_i;
+	port_instance * port_i;
+	policer_d * psh_d;
+	policer_c * psh_c;
+	q_entry * entry_i;
+	
+	if (!ps || !ps->priv || !P || !pdu_i) {
 		LOG_ERR("Wrong input parameters for rmt_enqueu_scheduling_policy_tx");
-		return RMT_ps_ENQ_ERR;
+		return RMT_PS_ENQ_ERR;
 	}
 	
 	//Get QoS_id
-	const struct pci * pci = pdu_pci_get_ro(pdu);
-	qos_id_t qos_id = pci_qos_id(pci);
+	pci_i = pdu_pci_get_ro(pdu_i);
+	qos_id = pci_qos_id(pci_i);
 	
-	//Policy global config
-	struct eqta_config * qta_ps = ps->priv;
-	
-	//Search PS_id for the qos_id, default = 0
-	int_t PS_id = search_PS_id(&qta_ps->Qos2ps_L, qos_id);
+	//Policy global conf
+	conf = ps->priv;
 	
 	//Search for Port instance
-	struct eqta_instance * eqta_e = search_eqta_instance(&qta_ps->eqta_instance_L, P);
-	if(!eqta_e) {
-		LOG_ERR("Unknown rmt_port for rmt_enqueu_scheduling_policy_tx, dropping PDU");
-		pdu_destroy(pdu);
-		return RMT_ps_ENQ_ERR;
+	port_i = P->rmt_ps_queues;
+	if(!port_i) {
+		LOG_ERR("Unknown rmt_port for rmt_enqueue_scheduling_policy_tx, dropping PDU");
+		pdu_destroy(pdu_i);
+		return RMT_PS_ENQ_ERR;
 	}
 	
-	if(PS_id < 0) {
+	if(port_i->count >= conf->global_max_count) {
+		LOG_INFO("Length exceeded for Port, dropping PDU");
+		pdu_destroy(pdu_i);
+		return RMT_PS_ENQ_DROP;
+	}
+	
+	//Search next module id for the qos_id, default = 0 (MUX)
+	next_module = 0;
+	def_cherish_th = 100;
+	def_urgency = conf->levels_urgency-1;
+	list_for_each_entry(qos2module_i, &conf->qos2modules, L) {
+		if (qos_id == qos2module_i->qos_id) {
+			next_module = qos2module_i->next_module;
+			def_cherish_th = qos2module_i->def_cherish_th;
+			def_urgency = qos2module_i->def_urgency;
+		}
+	}
+	
+	if(next_module == 0 || next_module > conf->num_policers) {
 		//To MUX
-		if(eqta_e->mux_count >=  qta_ps->cherish_thresholds[qta_ps->levels_cherish-1]) {
+		next_module = 0;
+		if(port_i->mux_count >= def_cherish_th) {
 			LOG_INFO("Length exceeded for Mux, dropping PDU");
-			pdu_destroy(pdu);
-			///Record dropped stats??
+			pdu_destroy(pdu_i);
 			return RMT_PS_ENQ_DROP;
 		}
 	} else {
 		//To PS
-		if(eqta_e->ps[PS_id].count >=  qta_ps->ps[PS_id].max_count) {
-			LOG_INFO("Length exceeded for PS id %u, dropping PDU", PS_id);
-			pdu_destroy(pdu);
-			///Record dropped stats??
+		psh_c = conf->policers + next_module - 1;
+		psh_d = port_i->policers + next_module - 1;
+		if(psh_d->count >=  psh_c->max_count) {
+			LOG_INFO("Length exceeded for policer/shaper id %u, dropping PDU", next_module);
+			pdu_destroy(pdu_i);
 			return RMT_PS_ENQ_DROP;
 		}
 	}	
 	
-	///Check max occupation??
-	if(qset->occupation >= qta_ps->max_count) {
-		LOG_INFO("Length exceeded for port occupation, dropping PDU");
-		pdu_destroy(pdu);
-		///Record dropped stats??
-		return RMT_PS_ENQ_DROP;
+	if(list_empty(&conf->buffer)) {
+		entry_i = rkzalloc(sizeof(q_entry), GFP_ATOMIC);
+	} else {
+		entry_i = list_first_entry(&conf->buffer, q_entry, L);
+		list_del(&entry_i->L);
+		conf->buffer_size--;
 	}
 	
-	struct q_entry * e = get_q_entry(qta_ps);
-	if(!e) {
+	if(!entry_i) {
 		LOG_ERR("Cannot allocate buffer, dropping PDU");
-		pdu_destroy(pdu);
+		pdu_destroy(pdu_i);
 		return RMT_PS_ENQ_DROP;
 	}
-	e->data = pdu;
-	e->weight = (uint_t) pdu_len(pdu);
-	INIT_LIST_HEAD(&e->L);
 	
-	if(PS_id < 0) {
+	entry_i->data = pdu_i;
+	entry_i->cost = (u64) pdu_len(pdu_i) + conf->headers_weight;
+	entry_i->cost *= conf->bytecost;
+	
+	if(next_module == 0) {
 		//Insert PDU into MUX queue
-		list_add_tail(&e->L, &eqta_e->Qs[qta_ps->levels_urgency-1]);
-		eqta_e->mux_count++;
+		list_add_tail(&entry_i->L, &port_i->Qs[def_urgency]);
+		port_i->mux_count++;
 	} else {
 		//Insert PDU into PS queue
-		list_add_tail(&e->L, &eqta_e->ps[PS_id].Q);
-		PS_i->count++;
+		list_add_tail(&entry_i->L, &psh_d->Q);
+		psh_d->count++;
 	}
-		
+	
+	port_i->count++;
 
 	LOG_DBG("PDU enqueued");
-	return RMT_ps_ENQ_SCHED;
+	return RMT_PS_ENQ_SCHED;
 }
 
-struct pdu * eqta_dequeue_p(struct rmt_ps * ps, struct rmt_n1_port * P) {
+pdu_p f_rmt_dequeue_policy(struct rmt_ps * ps, port_p P) {
+	base_config * conf;
+	port_instance * port_i;
+	q_entry * entry_i;
+	u8 num_policers, headers_weight, i, dst_max_count, mux_urgency;
+	struct timespec t1, td;
+	int T;
+	policer_c * psh_c, * psh_n_c;
+	policer_d * psh_d, * psh_n_d;
+	pdu_p pdu_i;
+	
 	if (!ps || !P) {
 		LOG_ERR("Wrong input parameters for rmt_enqueu_scheduling_policy_rx");
 		return NULL;
 	}
 	
-	//Policy global config
-	struct eqta_config * qta_ps = ps->priv;
+	//Policy global conf
+	conf = ps->priv;
 	
-	//Search for Port instance
-	struct eqta_instance * eqta_e = search_eqta_instance(&qta_ps->eqta_instance_L, P);
-	if(!eqta_e) {
-		LOG_ERR("Unknown rmt_port for rmt_enqueu_scheduling_policy_rx, dropping PDU");
-		pdu_destroy(pdu);
+	port_i = P->rmt_ps_queues;
+	if(!port_i) {
+		LOG_ERR("Unknown rmt_port for rmt_enqueue_scheduling_policy_rx, dropping PDU");
 		return NULL;
 	}
 	
-	uint_t num_ps = qta_ps->num_ps;
-	uint_t headers_weight = qta_ps->headers_weight;
+	num_policers = conf->num_policers;
+	headers_weight = conf->headers_weight;
 	
 	//Compute ticks from last call
-	struct timespec t1;
 	getnstimeofday (&t1);
-	uint_t T = 0; // temp
-	if(timespec_compare(&eqta_e->lastT, &t1) < 0) {
-		struct timespec td = timespec_sub(tl, eqta_e->lastT);
+	T = 0;
+	if(timespec_compare(&port_i->lastT, &t1) < 0) {
+		td = timespec_sub(t1, port_i->lastT);
 		if(td.tv_sec < 2) { // MAX 2s
 			T = td.tv_sec *1000000 + td.tv_nsec/1000;
 		} else {
 			T = 2000000;
 		}
-		eqta_e->lastT = t1;
+		port_i->lastT = t1;
 	}
-	struct q_entry * entry = NULL;
 	
-	//For each PS
-	// - Give credits for T ticks
-	// - Move all PDUs within credits
-	// - Check credits <= MAX
-	for(uint_t i = 0; i < num_ps; i++) {
-		struct ps_config_t * ps_conf = qta_ps->ps + i;
-		struct ps_data_t * ps_i = eqta_e->ps + i;
-		ps_i->credits += T * ps_conf->gain4tick;
+	
+	for(i = 0; i < num_policers; i++) {
+		psh_c = conf->policers + i;
+		psh_d = port_i->policers + i;
+		psh_d->credits += T * psh_c->gain_us;
 		
-		if(ps_conf->next_module < 0) {
+		if(psh_c->next_module == 0) {
 			//To MUX
-			uint_t cherish_max_count = qta_ps->cherish_thresholds[ps_conf->cherish_level];
-			uint_t mux_urgency = ps_conf->urgency_level;
-			while(!list_empty(&ps_i->Q) && ps_i->credits > 0) {
-				entry = list_first_entry(&ps_i->Q, struct q_entry, L);
-				list_del(&entry->L);
-				ps_i->credits -= (entry->weight + headers_weight);
-				ps_i->count--;
-				
-				if(eqta_e->mux_count >= cherish_max_count) {
-					LOG_INFO("Length exceeded for MUX queue for cherish %u, dropping PDU", ps_conf->cherish_level);
-					pdu_destroy(entry->pdu);
-					free_q_entry(base_conf, entry);
-					qset->occupation--;
+			dst_max_count = psh_c->cherish_th;
+			mux_urgency = psh_c->urgency_level;
+			
+			while(!list_empty(&psh_d->Q) && psh_d->credits > 0) {
+				entry_i = list_first_entry(&psh_d->Q, q_entry, L);
+				list_del(&entry_i->L);
+				psh_d->credits -= entry_i->cost;
+				psh_d->count--;
+				if(port_i->mux_count >= psh_c->cherish_th) {
+					LOG_INFO("Length exceeded for MUX queue for cherish_th %u, dropping PDU", psh_c->cherish_th);
+					pdu_destroy(entry_i->data);
+					list_add(&entry_i->L, &conf->buffer);
+					conf->buffer_size++;
+					port_i->count--;
 				} else {
-					INIT_LIST_HEAD(&entry->L);
-					list_add_tail(&entry->L, eqta_e->Qs+mux_urgency);
-					eqta_e->mux_count++;
+					list_add_tail(&entry_i->L, port_i->Qs+mux_urgency);
+					port_i->mux_count++;
 				}
 			}
 		} else {
 			//To another PS
-			struct ps_data_t * dst_PS_i = eqta_e->ps + ps_conf->next_module;
-			uint_t dst_max_count = qta_ps->ps[ps_conf->next_module].max_count;
+			psh_n_c = conf->policers + psh_c->next_module - 1;
+			psh_n_d = port_i->policers + psh_c->next_module - 1;
+			dst_max_count = psh_n_c->max_count;
 				
-			while(!list_empty(&ps_i->Q) && ps_i->credits > 0) {
-				entry = list_first_entry(&ps_i->Q, struct q_entry, L);
-				list_del(&entry->L);
-				ps_i->credits -= (entry->weight + headers_weight);
-				ps_i->count--;
-				
-				if(dst_PS_i->count >= dst_max_count) {
-					LOG_INFO("Length exceeded for dst PS (id %u), dropping PDU", ps_conf->next_module);
-					pdu_destroy(entry->pdu);
-					free_q_entry(base_conf, entry);
-					qset->occupation--;
+			while(!list_empty(&psh_d->Q) && psh_d->credits > 0) {
+				entry_i = list_first_entry(&psh_d->Q, q_entry, L);
+				list_del(&entry_i->L);
+				psh_d->credits -= entry_i->cost;
+				psh_d->count--;
+				if(psh_n_d->count >= dst_max_count) {
+					LOG_INFO("Length exceeded for dst PS (id %u), dropping PDU", psh_c->next_module);
+					pdu_destroy(entry_i->data);
+					list_add(&entry_i->L, &conf->buffer);
+					conf->buffer_size++;
+					port_i->count--;
 				} else {
-					INIT_LIST_HEAD(&entry->L);
-					list_add_tail(&entry->L, &dst_PS_i->Q);
-					dst_PS_i->count++;
+					list_add_tail(&entry_i->L, &psh_n_d->Q);
+					psh_n_d->count++;
 				}
 			}
 		}
 	}
 	
 	//Get next from MUX
-	uint_t levels_urgency = base_conf->levels_urgency;
-	for(uint_t i = 0; i < levels_urgency; i++) {
-		if(!list_empty(eqta_e->Qs+i)) {
-			entry = list_first_entry(eqta_e->Qs+i, struct q_entry, L);
-			list_del(&entry->L);
-			PDU * pdu = entry->pdu;
-			free_q_entry(base_conf, entry);
-			return pdu;
+	mux_urgency = conf->levels_urgency;
+	for(i = 0; i < mux_urgency; i++) {
+		if(!list_empty(port_i->Qs+i)) {
+			entry_i = list_first_entry(port_i->Qs+i, q_entry, L);
+			list_del(&entry_i->L);
+			pdu_i = entry_i->data;
+			list_add(&entry_i->L, &conf->buffer);
+			conf->buffer_size++;
+			port_i->count--;
+			port_i->mux_count--;
+			return pdu_i;
 		}
 	}
 	
 	return NULL;
 }
 
-void * eqta_q_create_p(struct rmt_ps *ps, struct rmt_n1_port * P) {
-		
+void * f_rmt_q_create_policy(struct rmt_ps *ps, port_p P) {
+	base_config * conf;
+	port_instance * port_i;
+	u8 i;
+	
 	if (!ps || !ps->priv || !P) {
 		LOG_ERR("Wrong input parameters for rmt_create_p_policy");
-		return -1;
+		return NULL;
 	}
-	//Policy global config
-	struct eqta_config * qta_ps = ps->priv;
+	//Policy global conf
+	conf = ps->priv;
 	
 	//Port instance
-	struct eqta_instance * eqta_e = search_eqta_instance(&qta_ps->eqta_instance_L, P);
-	if(eqta_e) {
+	if(P->rmt_ps_queues) {
 		LOG_WARN("Try to create port queues for an already set port");
-		return eqta_e;
+		return (port_instance *) P->rmt_ps_queues;
 	}
 	
-	eqta_e = kzalloc(sizeof(struct eqta_instance), GFP_ATOMIC);
-	if(!eqta_e) {
+	port_i = kzalloc(sizeof(port_instance), GFP_ATOMIC);
+	if(!port_i) {
 		LOG_ERR("Memory alloc problem in rmt_create_p_policy");
-		return -1;
+		return NULL;
 	}
 	
-	eqta_e->P = P;
-	eqta_e->mux_count = 0;
-	getnstimeofday (&eqta_e->lastT);
-	eqta_e->ps = kzalloc(sizeof(struct ps_data_t) * qta_ps->num_ps, GFP_ATOMIC);
-	eqta_e->Qs = kzalloc(sizeof(struct list_head) * qta_ps->levels_urgency, GFP_ATOMIC);
+	port_i->P = P;
+	port_i->mux_count = 0;
+	port_i->count = 0;
+	getnstimeofday (&port_i->lastT);
+	port_i->policers = kzalloc(sizeof(policer_d) * conf->num_policers, GFP_ATOMIC);
+	port_i->Qs = kzalloc(sizeof(list_h) * conf->levels_urgency, GFP_ATOMIC);
 	
-	if(!eqta_e->ps || !eqta_e->Qs) {
+	if(!port_i->policers || !port_i->Qs) {
 		LOG_ERR("Memory alloc problem in rmt_create_p_policy");
-		if(eqta_e->ps) {
-			kzfree(eqta_e->ps);
+		if(port_i->policers) {
+			kzfree(port_i->policers);
 		}
-		if(eqta_e->Qs) {
-			kzfree(eqta_e->Qs);
+		if(port_i->Qs) {
+			kzfree(port_i->Qs);
 		}
-		kzfree(eqta_e);
-		return -1;
+		kzfree(port_i);
+		return NULL;
 	}
 	 
-	for(int i = 0 ; i < qta_ps->num_ps; i++) {
-		eqta_e->ps[i].count = 0;
-		eqta_e->ps[i].credits = 0;
-		INIT_LIST_HEAD(&eqta_e->ps[i].Q);
+	for(i = 0 ; i < conf->num_policers; i++) {
+		port_i->policers[i].count = 0;
+		port_i->policers[i].credits = 0;
+		INIT_LIST_HEAD(&port_i->policers[i].Q);
 	}
 	
-	for(int i = 0 ; i < qta_ps->levels_urgency; i++) {
-		INIT_LIST_HEAD(eqta_e->Qs+i);
+	for(i = 0 ; i < conf->levels_urgency; i++) {
+		INIT_LIST_HEAD(port_i->Qs+i);
 	}
 	
-	entry->P->rmt_ps_queues = (void*)eqta_e;
-	return eqta_e;
+	P->rmt_ps_queues = (void*)port_i;
+	return port_i;
 }
 
-int eqta_q_destroy_p(struct rmt_ps *ps, struct rmt_n1_port * P) {
-	if (!ps || !P) {
+int f_rmt_q_destroy_policy(struct rmt_ps *ps, port_p P) {
+	if (!ps || !ps->priv || !P) {
 		LOG_ERR("Wrong input parameters for rmt_destroy_p_policy");
 		return -1;
 	}
 	
-	//Search for Port instance
-	struct eqta_instance * entry = search_eqta_instance(&qta_ps->eqta_instance_L, P);
-	if(!entry) {
+	if(!P->rmt_ps_queues) {
 		LOG_ERR("Unknown rmt_port for rmt_destroy_p_policy");
 		return -1;
 	}
-	free_port_instance(entry);
+	f_free_port_instance((base_config*) ps->priv, (port_instance *) P->rmt_ps_queues);
 	return 0;
 }
 
 
 /* Helper functions */
 
-struct q_entry * get_q_entry(struct eqta_config * base) {
-	if(!base){
-		LOG_ERR("Failed to get queue entry, policy not initialized");
-		return NULL;
-	}
-	
-	struct q_entry * entry = NULL;
-	
-	if(list_empty(&base->q_entry_L)) {
-		entry = rkzalloc(sizeof(struct q_entry), GFP_ATOMIC);
-	} else {
-		entry = list_first_entry(&base->q_entry_L, struct q_entry, L);
-		list_del(&entry->L);
-	}
-	
-	if (!entry) {
-		LOG_ERR("Failed to allocate queue entry.");
-		return NULL;
-	}
-	
-	INIT_LIST_HEAD(&entry->L);
-	entry->data = NULL;
-	entry->w = 0;
-	
-	return entry;
+static int f_policy_base_config_apply(struct policy_parm * param, void * data) {
+	return f_policy_set_param_pv((base_config *) data, policy_param_name(param), policy_param_value(param));
 }
 
-int free_q_entry(struct eqta_config * base, struct q_entry * entry) {
-	if(!base){
-		rkfree(pos);
-		LOG_ERR("Error while queue entry, policy not initialized");
-		return -1;
-	}
-	
-	///Check max buffer lenght and drop free if over it??
-	
-	INIT_LIST_HEAD(&entry->L);
-	list_add(&entry->L, &base->q_entry_L);
-	return 0;
-}
-
-static int eqta_config_apply(struct policy_parm * param, void * data) {
-	struct eqta_config * tmp = (struct eqta_config *) data;
-	return eqta_set_param_pv(tmp, policy_param_name(param), policy_param_value(param));
-}
-
-static int eqta_p_set_param(struct ps_base * bps, const char * name, const char * value) {
-	struct rmt_ps *ps = container_of(bps, struct rmt_ps, base);
-	return eqta_set_param_pv((struct eqta_config *) ps->priv, name, value);
+static int f_set_policy_set_param(struct ps_base * bps, const char * name, const char * value) {
+	struct rmt_ps *ps;
+	ps = container_of(bps, struct rmt_ps, base);
+	return f_policy_set_param_pv((base_config *) ps->priv, name, value);
 }
 
 
-static int eqta_set_param_pv(struct eqta_config * data, const char * name, const char * value) {
+static int f_policy_set_param_pv(base_config * conf, const char * name, const char * value) {
+	
+	char * v_name = (char *) name;
+	char * v_value = (char *) value;
+	char * p_ch;
+	u8 sub_id;
+	u8 v8;
+	u16 v16;
+	u32 v32;
+	u64 v64;
+	q_entry * entry_i;
+	policer_c * policer_i;
+	qos2module * qos2module_i, * qos2module_t;
+	
 	if (!name) {
 		LOG_ERR("Null parameter name");
 		return -1;
@@ -427,253 +435,215 @@ static int eqta_set_param_pv(struct eqta_config * data, const char * name, const
 		return -1;
 	}
 	
-	char * v_name = name;
-	char * v_value = value;
-	int v_id, v;
-	//getValue(&v_id, &v, v_value);
-	
+	p_ch = strchr(v_value, '.');
+	sub_id = -1;
+	if(p_ch) {
+		*p_ch = '\0';
+		if(kstrtou8(v_value, 10, &sub_id) ||  kstrtou64(p_ch+1, 10, &v64) ) {
+			*p_ch = '.';
+			LOG_ERR("Error while parsing parameter %s with value %s", name, value);
+			return -1;
+		}
+		*p_ch = '.';
+	} else if(kstrtou64(value, 10, &v64) ) {
+		LOG_ERR("Error while parsing parameter %s with value %s", name, value);
+		return -1;
+	}
+	v32 = (u32) v64;
+	v16 = (u16) v64;
+	v8 = (u8) v64;
+		
 	switch(v_name[0]) {
-		case 'c':
-			if(strcmp(v_name, "ch_th") == 0) {
-				if(v_id < 0 || v_id >= data->levels_cherish){
-					LOG_ERR("Invalid cherish value %d", v_id);
-					return -1;
-				}
-				if(v < 1){
-					LOG_ERR("Invalid cherish threshold %d for value %d", v, v_id);
-					return -1;
-				}
-				data->cherish_thresholds[v_id] = v;
+		case 'b':
+			if(strcmp(v_name, "bytecost") == 0) {
+				conf->bytecost = v8;
 				return 0;
 			}
 			break;
 		case 'h':
 			if(strcmp(v_name, "header_weight") == 0) {
-				if(v < 0){
-					LOG_ERR("Invalid header weight %d", v);
-					return -1;
-				}
-				data->headers_weight = v;
+				conf->headers_weight = v8;
 				return 0;
 			}
 			break;
 		case 'i':
 			if(strcmp(v_name, "init_buffer") == 0) {
-				if(v < 0){
-					LOG_ERR("Invalid buffer size %d", v);
-					return -1;
-				}
-				struct q_entry * entry = NULL;
-				for(int i = 0; i < v; i++) {
-					entry = rkzalloc(sizeof(struct q_entry), GFP_ATOMIC);
-					if(!entry){						
+				while(v16 > 0) {
+					entry_i = rkzalloc(sizeof(q_entry), GFP_ATOMIC);
+					if(!entry_i){						
 						LOG_ERR("Failure pre-allocating buffers");
-						return -1;
+					} else {
+						INIT_LIST_HEAD(&entry_i->L);
+						list_add(&entry_i->L, &conf->buffer);
+						conf->buffer_size++;
 					}
-					INIT_LIST_HEAD(&entry->L);
-					list_add(&entry->L, &data->q_entry_L);
-					data->q_entry_buffer_size++;
+					v16--;
 				}
 				return 0;
 			}
 			break;
 		case 'l':
-			if(strcmp(v_name, "levels_cherish") == 0) {
-				if(v < 0){
-					LOG_ERR("Invalid amount of cherish levels %d", v);
+			if(strcmp(v_name, "levels_urgency") == 0) {
+				if(conf->state & 1) {
+					LOG_ERR("Cannot re-confure the number of urgency queues after start-up");
 					return -1;
 				}
-				uint_t * t = data->cherish_thresholds;
-				data->cherish_thresholds = rkzalloc(sizeof(uint_t) * v, GFP_ATOMIC);
-				for(int i = 0; i < v; i++) {
-					data->cherish_thresholds[i] = 1;
-				}
-				if(t) {
-					for(int i = 0; i < v && i < data->levels_cherish; i++) {
-						data->cherish_thresholds[i] = t[i];
-					}
-					rkfree(e);
-				}
-				data->levels_cherish = v;
-				return 0;
-			} else if(strcmp(v_name, "levels_urgency") == 0) {
-				if(v < 0){
-					LOG_ERR("Invalid amount of urgency levels %d", v);
+				if(v8 == 0){
+					LOG_ERR("Required at least one urgency queue");
 					return -1;
 				}
-				data->levels_urgency = v;
+				conf->levels_urgency = v8;
 				return 0;
 			}
 			break;
 		case 'm':
-			if(strcmp(v_name, "max_count") == 0) {
-				if(v < 0){
-					LOG_ERR("Invalid max queue size %d", v);
-					return -1;
-				}
-				data->max_count = v;
+			if(strcmp(v_name, "max_mux_count") == 0) {
+				conf->max_count = v16;
+				return 0;
+			} else if(strcmp(v_name, "max_global_count") == 0) {
+				conf->global_max_count = v16;
 				return 0;
 			}
 			break;
 		case 'n':
-			if(strcmp(v_name, "num_ps") == 0) {
-				if(v < 0){
-					LOG_ERR("Invalid amount of policer/shapers, %d", v);
+			if(strcmp(v_name, "num_policers") == 0) {
+				if(conf->state & 2) {
+					LOG_ERR("Cannot re-confure the number of policers");
 					return -1;
 				}
-				struct ps_config_t * t = data->ps;
-				data->ps = rkzalloc(sizeof(struct ps_config_t) * v, GFP_ATOMIC);
-				if(!data->ps) {
+				
+				conf->policers = rkzalloc(sizeof(policer_c) * v8, GFP_ATOMIC);
+				if(!conf->policers) {
 					LOG_ERR("Failure allocating policer/shapers");
 					return -1;
 				}
-				
-				for(int i = 0; i < v; i++) {
-					data->ps[i].max_count = 100;
-					data->ps[i].gain_us = 100;
-					data->ps[i].max_credits = 100000;
-					data->ps[i].next_module = -1;
-					data->ps[i].cherish_level = data->levels_cherish-1;
-					data->ps[i].max_count =  data->levels_urgency-1;
+				conf->num_policers = v8;
+				while(v8 >0){
+					v8--;
+					conf->policers[v8].max_count = 100;
+					conf->policers[v8].gain_us = 100;
+					conf->policers[v8].max_credits = 100000;
+					conf->policers[v8].next_module = 0;
+					conf->policers[v8].cherish_th = 10;
+					conf->policers[v8].urgency_level =  conf->levels_urgency-1;
 				}
-				
-				if(data->ps) {
-					for(int i = 0; i < v && i < data->num_ps; i++) {
-						data->ps[i].max_count = t[i].max_count;
-						data->ps[i].gain_us = t[i].gain_us;
-						data->ps[i].max_credits = t[i].max_credits;
-						data->ps[i].next_module = t[i].next_module;
-						data->ps[i].cherish_level = t[i].cherish_level;
-						data->ps[i].urgency_level = t[i].urgency_level;
-					}
-					rkfree(e);
-				}
-				
-				data->num_ps = v;
+				conf->state |= 2;
 				
 				return 0;
 			}
 			break;
 		case 'p':
 			if(v_name[1] == 's' && v_name[2] == '_') {
-				v_name += 3;
-				
-				if(v_id < 0 || v_id >= data->num_ps){
-					LOG_ERR("Invalid ps_id %d", v_id);
+				if(sub_id == 0 || sub_id > conf->num_policers){
+					LOG_ERR("Invalid policer id %u", sub_id);
 					return -1;
 				}
-				
+				v_name += 3;
+				policer_i = conf->policers + sub_id -1;
 				
 				if(strcmp(v_name, "max_count") == 0) {
-					if(v < 1) {
-						LOG_ERR("Invalid max P/S queue size %d", v);
-						return -1;
-					}
-					
-					data->ps[v_id].max_count = v;
+					policer_i->max_count = v16;
 					return 0;
 				} else if(strcmp(v_name, "gain_us") == 0) {
-					if(v < 1) {
-						LOG_ERR("Invalid P/S gain per us %d", v);
-						return -1;
-					}
-					
-					data->ps[v_id].gain_us = v;
+					policer_i->gain_us = v64;
 					return 0;
 				} else if(strcmp(v_name, "max_credit") == 0) {
-					if(v < 1) {
-						LOG_ERR("Invalid max ammunt of credits at P/S %d", v);
-						return -1;
-					}
-					
-					data->ps[v_id].max_credits = v;
+					policer_i->max_credits = v64;
 					return 0;
 				} else if(strcmp(v_name, "next_module") == 0) {
-					if(v < 0){
-						v = -1;
+					if(v8 >= conf->num_policers) {
+						LOG_ERR("Invalid next P/S id %d", v8);
 					}
-					if(v >= data->num_ps) {
-						LOG_ERR("Invalid next P/S id %d", v);
-					}
-					
-					data->ps[v_id].next_module = v;
+					policer_i->next_module = v8;
 					return 0;
-				} else if(strcmp(v_name, "cherish") == 0) {
-					if(v < 0 || v >= data->levels_cherish) {
-						LOG_ERR("Invalid cherish level %d at P/S %d", v, v_id);
-						return -1;
-					}
-					
-					data->ps[v_id].cherish_level = v;
+				} else if(strcmp(v_name, "cherish_th") == 0) {
+					policer_i->cherish_th = v8;
 					return 0;
 				} else if(strcmp(v_name, "urgency") == 0) {
-					if(v < 0 || v >= data->levels_urgency) {
-						LOG_ERR("Invalid urgency level %d at P/S %d", v, v_id);
+					if(v8 >= conf->levels_urgency) {
+						LOG_ERR("Invalid urgency level %u at P/S %u", v8, sub_id);
 						return -1;
 					}
-					
-					data->ps[v_id].urgency_level = v;
+					policer_i->max_count = v8;
 					return 0;
 				}
 			}
 			break;
 		case 'q':
-			if(strcmp(v_name, "qos2ps") == 0) {
-				if(v_id < 0){
-					LOG_ERR("Invalid qos_id %d", v_id);
+			if(v_name[1] == 'o' && v_name[2] == 's' && v_name[3] == '_') {
+				if(sub_id == 0 || sub_id > conf->num_policers){
+					LOG_ERR("Invalid policer id %u", sub_id);
 					return -1;
 				}
-				if(v < 0){
-					v = -1;
-				}
-				struct qos2ps_t * e = NULL,  * t;
-				list_for_each_entry(t, &data->Qos2ps_L, L) {
-					if (t.qos_id == v_id) {
-						e = t;
+				v_name += 4;
+				qos2module_i = NULL;
+				list_for_each_entry(qos2module_t, &conf->qos2modules, L) {
+					if (sub_id == (u8) qos2module_t->qos_id) {
+						qos2module_i = qos2module_t;
 					}
 				}
-				if(!e) {
-					e = rkzalloc(sizeof(struct qos2ps_t), GFP_ATOMIC);
-					if(!e) {
-						LOG_ERR("Failure allocating map QoS to policer/shaper");
+				if(!qos2module_i) {
+					qos2module_i = rkzalloc(sizeof(qos2module), GFP_ATOMIC);
+					if(!qos2module_i){						
+						LOG_ERR("Failure allocating qos conf");
+						return -1;
+					} else {
+						INIT_LIST_HEAD(&qos2module_i->L);
+						list_add(&qos2module_i->L, &conf->qos2modules);
+						qos2module_i->qos_id = (qos_id_t) sub_id;
+						qos2module_i->next_module = 0;
+						qos2module_i->def_cherish_th = 0;
+						qos2module_i->def_urgency = conf->levels_urgency-1;
+					}
+				}
+				if(strcmp(v_name, "next") == 0) {
+					if(v8 >= conf->num_policers) {
+						LOG_ERR("Invalid next P/S id %d", v8);
+					}
+					qos2module_i->next_module = v8;
+				} else if(strcmp(v_name, "urgency") == 0) {
+					if(v8 >= conf->levels_urgency) {
+						LOG_ERR("Invalid urgency level  %u at P/S %u", v8, sub_id);
 						return -1;
 					}
-					e->qos_id = v_id;
-					INIT_LIST_HEAD(&e->L);
-					list_add_tail(&e->L, &data->Qos2ps_L);
+					qos2module_i->def_urgency = v8;
+				} else if(strcmp(v_name, "cherish_th") == 0) {
+					qos2module_i->def_cherish_th = v16;
 				}
-				e->PS_id = v;
 			}
 			break;
 	}
 	return 1;
 }
 
-void free_port_instance(struct eqta_instance * entry) {
-	entry->P->rmt_ps_queues = NULL;
-	list_del(&entry->L);
+void f_free_port_instance(base_config * conf, port_instance * port_i) {
+	q_entry * entry_i;
+	u8 i;
 	
-	for(int i = 0; i < base_conf->num_ps; i++) {
-		while(!empty_list(&entry->ps[i])) {
-			struct q_entry * e;
-			e = list_first_entry(&entry->ps[i], struct q_entry, L);
-			list_del(&e->L);
-			rkfree(e);
+	port_i->P->rmt_ps_queues = NULL;
+	list_del(&port_i->L);
+	
+	for(i = 0; i < conf->num_policers; i++) {
+		while(!list_empty(&port_i->policers[i].Q)) {
+			entry_i = list_first_entry(&port_i->policers[i].Q, q_entry, L);
+			list_del(&entry_i->L);
+			list_add(&entry_i->L, &conf->buffer);
+			conf->buffer_size++;
 		}
 	}
-	rkfree(entry->ps);
+	rkfree(port_i->policers);
 	
-	for(int i = 0; i < base_conf->levels_urgency; i++) {
-		while(!empty_list(&entry->Qs[i])) {
-			struct q_entry * e;
-			e = list_first_entry(&entry->Qs[i], struct q_entry, L);
-			list_del(&e->L);
-			rkfree(e);
+	for(i = 0; i < conf->levels_urgency; i++) {
+		while(!list_empty(port_i->Qs + i)) {
+			entry_i = list_first_entry(port_i->Qs + i, q_entry, L);
+			list_del(&entry_i->L);
+			list_add(&entry_i->L, &conf->buffer);
+			conf->buffer_size++;
 		}
 	}
-	rkfree(entry->Qs);
+	rkfree(port_i->Qs);
 		
-	rkfree(entry);
+	rkfree(port_i);
 }
 
 
@@ -682,8 +652,8 @@ void free_port_instance(struct eqta_instance * entry) {
 */
 static struct ps_factory qta_factory = {
 		.owner   = THIS_MODULE,
-		.create  = eqta_create,
-		.destroy = eqta_destroy,
+		.create  = f_policy_create,
+		.destroy = f_policy_destroy,
 };
 
 static int __init mod_init(void) {
@@ -706,22 +676,3 @@ static void __exit mod_exit(void) {
 
 module_init(mod_init);
 module_exit(mod_exit);
-
-MODULE_DESCRIPTION("RMT QTA MUX policy set");
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Sergio Leon <gaixas1@gmail.com>");
-
-/*
-	*_attr_show
-*/
-/*
-RINA_SYSFS_Ops(qta_qset);
-RINA_ATTRS(qta_qset, port_id, occupation);
-RINA_KTYPE(qta_qset);
-
-RINA_SYSFS_Ops(qos_queue);
-RINA_ATTRS(qos_queue, queued_pdus, drop_pdus, total_pdus, urgency,
-		threshold, absolute_threshold,
-		drop_probability, qos_id);
-RINA_KTYPE(qos_queue);
-*/

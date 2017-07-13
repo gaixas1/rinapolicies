@@ -1,125 +1,105 @@
 //rmt_eqta.h
+#include <linux/module.h>
 #include <linux/list.h>
 #include <linux/time.h>
 #include <linux/export.h>
-#include <linux/module.h>
 #include <linux/string.h>
-#include <linux/random.h>
+
 #include "logs.h"
 #include "rds/rmem.h"
 #include "rmt-ps.h"
 #include "policies.h"
 #include "debug.h"
 
-/* Data structures */
+/*
+typedef unsigned char u8;
+typedef signed char s8;
+typedef unsigned short u16;
+typedef signed short s16;
+typedef unsigned long u32;
+typedef signed long s32;
+typedef unsigned long long u64;
+typedef signed long long s64;
+*/
 
-//Configuration of ps
-struct ps_config_t {
-	uint_t max_count; // Max amount of PDUs admited
-	uint_t gain_us; // Credits gain each us
-	uint_t max_credits; // Max amount of accumulated credits
-	
-	uint_t next_module; // Module towards where forward PDUs. N >= 0 -> ps[N], else Mux
-	uint_t cherish_level; // Cherish level of the ps (Only if next < 0)
-	uint_t urgency_level; // Urgency level of the ps (Only if next < 0)
-};
+typedef struct list_head list_h;
+typedef struct pdu * pdu_p;
+typedef struct rmt_n1_port * port_p;
 
-//Queue entry
-struct q_entry {
-	struct list_head L;
-	
-	struct pdu * data;
-	uint_t weight;
-};
+/// Data structures
 
-//Data structure of ps
-struct ps_data_t {
-	struct list_head Q; // PS queue of q_entry (not part of listo of ps_data_t)
-	uint_t count; // Amount of PDUs stored
-	uint_t credits; // Amount of accumulated credits
-};
+typedef struct q_entry_s {
+	list_h L;
+	pdu_p data;
+	u32 cost; // PDU + headers cost
+} q_entry;
 
-//Data structure of Mux queue
-struct mux_Q_t {
-	uint_t count; // Amount of PDUs stored
-}
+typedef struct policer_c_t {	
+	u8 next_module; //* Module towards where forward PDUs. N > 0 -> ps[N-1], else Mux
+	u8 cherish_th; //* Cherish thresold of the ps (Only if next < 0)
+	u8 urgency_level; //* Urgency level of the ps (Only if next < 0)
+	u16 max_count; //* Max amount of PDUs admited
+	u64 gain_us; //* Credits gain each us
+	u64 max_credits; //* Max amount of accumulated credits
+} policer_c;
 
-//Mapping QoS id to ps index
-struct qos2ps_t {
-	struct list_head L;
-	
+typedef struct policer_d_t {
+	list_h Q; // PS queue of q_entry (not part of listo of ps_data_t)
+	u16 count; // Amount of PDUs stored
+	s64 credits; // Amount of accumulated credits
+} policer_d;
+
+typedef struct queue_t {
+	u16 count; // Amount of PDUs stored
+} queue;
+
+typedef struct qos2module_t {
+	list_h L;
 	qos_id_t qos_id;
-	int_t PS_id;
-};
+	u8 next_module;
+	u8 def_urgency; // Level of urgency
+	u16 def_cherish_th; // Level of cherish
+} qos2module;
 
-// eqta instance information
-struct eqta_instance {
-	struct rmt_n1_port * P;
-	
-	///ps related
+typedef struct port_instance_t {
+	list_h L;
+	port_p P;
 	struct timespec lastT;	// "Time" of last call
-	struct ps_data_t * ps; // ps modules, len == eqta_config.num_ps
-	
-	///Mux related
-	uint_t mux_count; // Amount of PDUs waiting on the mux queues
-	struct list_head * Qs; // Urgency queues in the mux, len == eqta_config.levels_urgency
-};
+	policer_d * policers; // ps modules, len == eqta_config.num_ps
+	list_h * Qs; // Urgency queues in the mux, len == eqta_config.levels_urgency
+	u16 mux_count; // Amount of PDUs waiting on the mux queues
+	u16 count; // Amount of PDUs waiting on all port queues
+	u16 max_count; // Max amount of PDUs waiting on all port queues
+} port_instance;
 
-// Configuration of the policy
-struct eqta_config {
-	uint_t headers_weight; // Extra weight of headers
-	uint_t num_ps; // Number of ps in the module
-	uint_t levels_cherish; // Levels of cherish
-	uint_t * cherish_thresholds; // cherish_thresholds, len = levels_cherish
-	uint_t levels_urgency; // Levels of urgency
-	uint_t max_count; // Max ocupation on port
-	struct list_head q_entry_L; // Buffer of q_entries
-	uint_t q_entry_buffer_size; // Size of buffer of q_entries
-	
-	struct ps_config_t * ps; // Configuration of ps modules, len == num_ps
-	struct list_head Qos2ps_L; // List mapping QoS_id to ps index
-	
-	struct list_head eqta_instance_L; // List storing port instances
-};
+typedef struct base_config_t {
+	u8 state;
+	u8 headers_weight; //* Extra weight of headers
+	u8 num_policers; //*2 Number of ps in the module
+	u8 levels_urgency; //*1 Levels of urgency
+	u8 bytecost; // credit cost per byte
+	u16 max_count; //* Max ocupation on mux
+	u16 global_max_count; //* Max ocupation on port
+	u16 buffer_size; //* Size of buffer of q_entries
+	policer_c * policers; // Configuration of policer/shaper modules, len == num_ps
+	list_h buffer; //* Buffer of q_entries
+	list_h qos2modules; // List mapping QoS_id to ps index
+	list_h port_instances; // List storing port instances
+} base_config;
 
 /* Function headers */
 
-static struct ps_base * eqta_create(struct rina_component * component);
-static void eqta_destroy(struct ps_base * bps);
+static struct ps_base * f_policy_create(struct rina_component * component);
+static void f_policy_destroy(struct ps_base * bps);
 
-void * eqta_q_create_p(struct rmt_ps *ps, struct rmt_n1_port * P);
-int eqta_q_destroy_p(struct rmt_ps *ps, struct rmt_n1_port * P);
-int eqta_enqueue_p(struct rmt_ps *ps, struct rmt_n1_port * P, struct pdu *pdu);
-struct pdu * eqta_dequeue_p(struct rmt_ps *ps, struct rmt_n1_port * P);
+void * f_rmt_q_create_policy(struct rmt_ps *ps, port_p P);
+int f_rmt_q_destroy_policy(struct rmt_ps *ps, port_p P);
+int f_rmt_enqueue_policy(struct rmt_ps *ps, port_p P, pdu_p pdu_i);
+pdu_p f_rmt_dequeue_policy(struct rmt_ps *ps, port_p P);
 
-static int eqta_p_set_param(struct ps_base * bps, const char * name, const char * value);
-static int eqta_config_apply(struct policy_parm * param, void * data);
+static int f_set_policy_set_param(struct ps_base * bps, const char * name, const char * value);
+static int f_policy_base_config_apply(struct policy_parm * param, void * data);
 
-static int eqta_set_param_pv(struct eqta_config * data, const char * name, const char * value);
+static int f_policy_set_param_pv(base_config * data, const char * name, const char * value);
 
-struct q_entry * get_q_entry(struct eqta_config * base);
-int free_q_entry(struct eqta_config * base, struct q_entry * entry);
-
-void free_port_instance(struct eqta_instance * entry);
-
-/* Inline functions */
-__always_inline int_t search_PS_id(list_head * L, const qos_id_t qos_id) {
-	int_t PS_id = -1;
-    struct qos2ps_t * qos2ps_e;
-	list_for_each_entry(qos2ps_e, L, L) {
-		if (qos_id == qos2ps_e->qos_id) {
-			PS_id = qos2ps_e->PS_id;
-		}
-	}
-	return PS_id;
-};
-
-__always_inline struct eqta_instance * search_eqta_instance(list_head * L, rmt_n1_port * P) {
-	eqta_instance *  eqta_e = NULL;
-	list_for_each_entry(eqta_e, L, L) {
-		if (P == eqta_e->P) {
-			return P; 
-		}
-	}
-	return NULL;
-};
+void f_free_port_instance(base_config * conf, port_instance * port_i);

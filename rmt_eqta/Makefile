@@ -1,31 +1,13 @@
-ifndef KREL
-KREL=`uname -r`
-endif
-
-ifndef KDIR
-KDIR=/lib/modules/$(KREL)/build
-endif
+obj-m += rmt_eqta.o
 
 ifndef IRATI_KSDIR
-IRATI_KSDIR=${PWD}/../../kernel
+IRATI_KSDIR=/root/stack/kernel
 endif
 
-ccflags-y = -Wtype-limits -I${src}/../../kernel
-
-obj-m := rmt_eqta-plugin.o
-rmt_eqta-plugin-y := rmt_eqta.o
+ccflags-y = -Wtype-limits -I${IRATI_KSDIR}
 
 all:
-	$(MAKE) -C $(KDIR) KBUILD_EXTRA_SYMBOLS=${IRATI_KSDIR}/Module.symvers M=$$PWD
+	make -C /lib/modules/$(shell uname -r)/build KBUILD_EXTRA_SYMBOLS=${IRATI_KSDIR}/Module.symvers  M=$(PWD) modules
 
 clean:
-	rm -r -f *.o *.ko *.mod.c *.mod.o Module.symvers .*.cmd .tmp_versions modules.order
-
-install:
-	$(MAKE) -C $(KDIR) M=$$PWD modules_install
-	cp rmt_eqta-plugin.manifest /lib/modules/$(KREL)/extra/
-	depmod -a
-
-uninstall:
-	@echo "This target has not been implemented yet"
-	@exit 1
+	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
