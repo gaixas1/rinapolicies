@@ -1,0 +1,11 @@
+{
+        "PluginName": "rmt_eqta-plugin",
+        "PluginVersion": "1",
+        "PolicySets" : [
+                {
+                        "Name": "rmt_eqta-ps",
+                        "Component": "rmt",
+                        "Version" : "1"
+                }
+        ]
+}
