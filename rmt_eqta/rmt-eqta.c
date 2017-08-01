@@ -1,7 +1,7 @@
-//rmt_eqta.c
-#define RINA_PREFIX "rmt_eqta-plugin"
-#define RINA_QTA_MUX_ps_NAME "rmt_eqta-ps"
-#include "rmt_eqta.h"
+//rmt-eqta.c
+#define RINA_PREFIX "rmt-eqta-plugin"
+#define RINA_QTA_MUX_ps_NAME "rmt-eqta-ps"
+#include "rmt-eqta.h"
 
 
 MODULE_DESCRIPTION("RMT QTA MUX policy set");

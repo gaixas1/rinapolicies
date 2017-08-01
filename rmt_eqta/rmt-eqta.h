@@ -1,4 +1,4 @@
-//rmt_eqta.h
+//rmt-eqta.h
 #include <linux/module.h>
 #include <linux/list.h>
 #include <linux/time.h>

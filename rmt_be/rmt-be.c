@@ -1,7 +1,7 @@
- //rmt_be.c
-#define RINA_PREFIX "rmt_be-plugin"
-#define RINA_BE_PS_NAME "rmt_be-ps_i"
-#include "rmt_be.h"
+ //rmt-be.c
+#define RINA_PREFIX "rmt-be-plugin"
+#define RINA_BE_PS_NAME "rmt-be-ps"
+#include "rmt-be.h"
 
 MODULE_DESCRIPTION("RMT BE policy set");
 MODULE_LICENSE("GPL");
@@ -280,7 +280,7 @@ void f_free_port_instance(struct port_instance * port_i) {
 static struct ps_factory qta_factory = {
 		.owner = THIS_MODULE,
 		.create = f_policy_create,
-		.destroy = NULL,//f_policy_destroy,
+		.destroy = f_policy_destroy,
 };
 
 static int __init mod_init(void) {

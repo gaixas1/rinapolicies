@@ -1,13 +1,33 @@
-obj-m += rmt_eqta.o
-
 ifndef IRATI_KSDIR
 IRATI_KSDIR=/root/stack/kernel
 endif
 
 ccflags-y = -Wtype-limits -I${IRATI_KSDIR}
 
-all:
-	make -C /lib/modules/$(shell uname -r)/build KBUILD_EXTRA_SYMBOLS=${IRATI_KSDIR}/Module.symvers  M=$(PWD) modules
+obj-m := rmt-eqta-plugin.o
+rmt-eqta-plugin-y := rmt-eqta.o
 
+all:
+	make -C /lib/modules/$(shell uname -r)/build KBUILD_EXTRA_SYMBOLS=${IRATI_KSDIR}/Module.symvers M=$(PWD) modules
+	
 clean:
-	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
+	rm -r -f *.o *.ko *.rc *.mod.c *.mod.o Module.symvers .*.cmd .tmp_versions modules.order
+
+install:
+	make -C /lib/modules/$(shell uname -r)/build M=$$PWD modules_install
+	cp rmt-eqta-plugin.manifest /lib/modules/$(shell uname -r)/extra/
+	depmod -a
+
+uninstall:
+	@echo "This target has not been implemented yet"
+	@exit 1
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	

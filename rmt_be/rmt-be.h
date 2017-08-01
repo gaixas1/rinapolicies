@@ -1,4 +1,4 @@
-//rmt_be.h
+//rmt-be.h
 #include <linux/module.h>
 #include <linux/list.h>
 #include <linux/export.h>
