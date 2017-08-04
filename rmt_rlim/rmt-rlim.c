@@ -42,6 +42,7 @@ static struct ps_base * f_policy_create(struct rina_component * component){
 	INIT_LIST_HEAD(&conf->Q2CU);
 	
 	conf->max_count = 100;
+	conf->default_ecn = 50;
 	conf->buffer_size = 0;
 	conf->levels_urgency = 1;
 	conf->levels_cherish = 1;
@@ -183,8 +184,11 @@ int f_rmt_enqueue_policy(struct rmt_ps *ps, port_p P, pdu_p pdu_i) {
 	q_entry * entry_i;
 	u8 next_urgency;
 	u8 next_cherish;
+	u16 ecn;
 	u16 q_id;
 	qos2CU * qos2cu_i;
+    struct pci * pci;
+	unsigned long pci_flags;
 	
 	if (!ps || !ps->priv || !P || !pdu_i) {
 		LOG_ERR("Wrong input parameters for rmt_enqueu_scheduling_policy_tx");
@@ -214,10 +218,12 @@ int f_rmt_enqueue_policy(struct rmt_ps *ps, port_p P, pdu_p pdu_i) {
 	
 	next_urgency = conf->levels_urgency -1;
 	next_cherish = conf->levels_cherish -1;
+	ecn = conf->default_ecn;
 	list_for_each_entry(qos2cu_i, &conf->Q2CU, L) {
 		if (qos_id == qos2cu_i->qos_id) {
 			next_urgency = qos2cu_i->urgency;
 			next_cherish = qos2cu_i->cherish;
+			ecn = qos2cu_i->ecn;
 			break;
 		}
 	}
@@ -250,6 +256,12 @@ int f_rmt_enqueue_policy(struct rmt_ps *ps, port_p P, pdu_p pdu_i) {
 	q_id = next_cherish + next_urgency * conf->levels_cherish;
 	list_add_tail(&entry_i->L, &port_i->Q[q_id].q);
 	port_i->count++;
+	
+	if(port_i->count > ecn) {
+		pci = pdu_pci_get_rw(pdu_i);	
+		pci_flags = pci_flags_get(pci);
+		pci_flags_set(pci, pci_flags |= PDU_FLAGS_EXPLICIT_CONGESTION);
+	}
 	
 	LOG_DBG("PDU enqueued");
 	return RMT_PS_ENQ_SCHED;
@@ -712,6 +724,7 @@ static int f_policy_set_param_pv(base_config * conf, const char * name, const ch
 					qos2CU_i->qos_id = sub_id;
 					qos2CU_i->urgency = v8;
 					qos2CU_i->cherish = conf->levels_cherish-1;
+					qos2CU_i->ecn = conf->default_ecn;
 				} else {
 					qos2CU_i->urgency = v8;
 				}
@@ -726,9 +739,25 @@ static int f_policy_set_param_pv(base_config * conf, const char * name, const ch
 					list_add(&qos2CU_i->L, &conf->Q2CU);
 					qos2CU_i->qos_id = sub_id;
 					qos2CU_i->urgency = conf->levels_urgency-1;
+					qos2CU_i->ecn = conf->default_ecn;
 					qos2CU_i->cherish = v8;
 				} else {
 					qos2CU_i->cherish = v8;
+				}
+			}
+			if(strcmp(v_name, "qos_ecn") == 0) {
+				if(qos2CU_i == NULL) {
+					qos2CU_i = (qos2CU *) KALLOC(sizeof(qos2CU));
+					if(!qos2CU_i){						
+						LOG_ERR("Failure allocating qos conf");
+						return -1;
+					}
+					list_add(&qos2CU_i->L, &conf->Q2CU);
+					qos2CU_i->qos_id = sub_id;
+					qos2CU_i->urgency = conf->levels_urgency-1;
+					qos2CU_i->ecn = v16;
+				} else {
+					qos2CU_i->ecn = v16;
 				}
 			}
 			break;

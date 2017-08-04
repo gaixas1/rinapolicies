@@ -50,6 +50,7 @@ typedef struct qos2CU_t {
 	qos_id_t qos_id;
 	u8 urgency;
 	u8 cherish;
+	u16 ecn;
 } qos2CU;
 
 typedef struct port_instance_t {
@@ -65,6 +66,7 @@ typedef struct port_instance_t {
 
 typedef struct base_config_s {
 	u16 max_count;
+	u16 default_ecn;
 	u16 buffer_size;
 	u8 levels_urgency;
 	u8 levels_cherish;

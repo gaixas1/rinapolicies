@@ -226,6 +226,8 @@ pdu_p f_rmt_dequeue_policy(struct rmt_ps * ps, port_p P) {
 	policer_c * psh_c, * psh_n_c;
 	policer_d * psh_d, * psh_n_d;
 	pdu_p pdu_i;
+    struct pci * pci;
+	unsigned long pci_flags;
 	
 	if (!ps || !P) {
 		LOG_ERR("Wrong input parameters for rmt_enqueu_scheduling_policy_rx");
@@ -282,6 +284,11 @@ pdu_p f_rmt_dequeue_policy(struct rmt_ps * ps, port_p P) {
 				} else {
 					list_add_tail(&entry_i->L, port_i->Qs+mux_urgency);
 					port_i->mux_count++;
+					if(port_i->mux_count > psh_c->ecn_th) {
+						pci = pdu_pci_get_rw(entry_i->data);	
+						pci_flags = pci_flags_get(pci);
+						pci_flags_set(pci, pci_flags |= PDU_FLAGS_EXPLICIT_CONGESTION);
+					}
 				}
 			}
 		} else {
@@ -525,6 +532,7 @@ static int f_policy_set_param_pv(base_config * conf, const char * name, const ch
 					conf->policers[v8].max_credits = 100000;
 					conf->policers[v8].next_module = 0;
 					conf->policers[v8].cherish_th = 10;
+					conf->policers[v8].ecn_th = 5;
 					conf->policers[v8].urgency_level =  conf->levels_urgency-1;
 				}
 				conf->state |= 2;
@@ -558,6 +566,9 @@ static int f_policy_set_param_pv(base_config * conf, const char * name, const ch
 					return 0;
 				} else if(strcmp(v_name, "cherish_th") == 0) {
 					policer_i->cherish_th = v8;
+					return 0;
+				} else if(strcmp(v_name, "ecn_th") == 0) {
+					policer_i->ecn_th = v8;
 					return 0;
 				} else if(strcmp(v_name, "urgency") == 0) {
 					if(v8 >= conf->levels_urgency) {
