@@ -36,9 +36,9 @@ typedef struct q_entry_s {
 
 typedef struct policer_c_t {	
 	u8 next_module; //* Module towards where forward PDUs. N > 0 -> ps[N-1], else Mux
-	u8 cherish_th; //* Cherish thresold of the ps (Only if next < 0)
-	u8 ecn_th; //* ECN thresold of the ps (Only if next < 0)
 	u8 urgency_level; //* Urgency level of the ps (Only if next < 0)
+	u16 cherish_th; //* Cherish thresold of the ps (Only if next < 0)
+	u16 ecn_th; //* ECN thresold of the ps (Only if next < 0)
 	u16 max_count; //* Max amount of PDUs admited
 	u64 gain_us; //* Credits gain each us
 	u64 max_credits; //* Max amount of accumulated credits
@@ -60,6 +60,7 @@ typedef struct qos2module_t {
 	u8 next_module;
 	u8 def_urgency; // Level of urgency
 	u16 def_cherish_th; // Level of cherish
+	u16 def_ecn_th; // Level of cherish
 } qos2module;
 
 typedef struct port_instance_t {

@@ -118,12 +118,14 @@ int f_rmt_enqueue_policy(struct rmt_ps *ps, port_p P, pdu_p pdu_i) {
 	qos_id_t qos_id;
 	base_config * conf;
 	u8 next_module, def_urgency;
-	u16 def_cherish_th;
+	u16 def_cherish_th, def_ecn_th;
 	qos2module * qos2module_i;
 	port_instance * port_i;
 	policer_d * psh_d;
 	policer_c * psh_c;
 	q_entry * entry_i;
+    struct pci * pci;
+	unsigned long pci_flags;
 	
 	if (!ps || !ps->priv || !P || !pdu_i) {
 		LOG_ERR("Wrong input parameters for rmt_enqueu_scheduling_policy_tx");
@@ -154,11 +156,13 @@ int f_rmt_enqueue_policy(struct rmt_ps *ps, port_p P, pdu_p pdu_i) {
 	//Search next module id for the qos_id, default = 0 (MUX)
 	next_module = 0;
 	def_cherish_th = 100;
+	def_ecn_th = 50;
 	def_urgency = conf->levels_urgency-1;
 	list_for_each_entry(qos2module_i, &conf->qos2modules, L) {
 		if (qos_id == qos2module_i->qos_id) {
 			next_module = qos2module_i->next_module;
 			def_cherish_th = qos2module_i->def_cherish_th;
+			def_ecn_th = qos2module_i->def_ecn_th;
 			def_urgency = qos2module_i->def_urgency;
 		}
 	}
@@ -204,6 +208,12 @@ int f_rmt_enqueue_policy(struct rmt_ps *ps, port_p P, pdu_p pdu_i) {
 		//Insert PDU into MUX queue
 		list_add_tail(&entry_i->L, &port_i->Qs[def_urgency]);
 		port_i->mux_count++;
+		
+		if(port_i->mux_count > def_ecn_th) {
+			pci = pdu_pci_get_rw(entry_i->data);	
+			pci_flags = pci_flags_get(pci);
+			pci_flags_set(pci, pci_flags |= PDU_FLAGS_EXPLICIT_CONGESTION);
+		}
 	} else {
 		//Insert PDU into PS queue
 		list_add_tail(&entry_i->L, &psh_d->Q);
@@ -531,8 +541,8 @@ static int f_policy_set_param_pv(base_config * conf, const char * name, const ch
 					conf->policers[v8].gain_us = 100;
 					conf->policers[v8].max_credits = 100000;
 					conf->policers[v8].next_module = 0;
-					conf->policers[v8].cherish_th = 10;
-					conf->policers[v8].ecn_th = 5;
+					conf->policers[v8].cherish_th = 100;
+					conf->policers[v8].ecn_th = 50;
 					conf->policers[v8].urgency_level =  conf->levels_urgency-1;
 				}
 				conf->state |= 2;
@@ -565,17 +575,17 @@ static int f_policy_set_param_pv(base_config * conf, const char * name, const ch
 					policer_i->next_module = v8;
 					return 0;
 				} else if(strcmp(v_name, "cherish_th") == 0) {
-					policer_i->cherish_th = v8;
+					policer_i->cherish_th = v16;
 					return 0;
 				} else if(strcmp(v_name, "ecn_th") == 0) {
-					policer_i->ecn_th = v8;
+					policer_i->ecn_th = v16;
 					return 0;
 				} else if(strcmp(v_name, "urgency") == 0) {
 					if(v8 >= conf->levels_urgency) {
 						LOG_ERR("Invalid urgency level %u at P/S %u", v8, sub_id);
 						return -1;
 					}
-					policer_i->max_count = v8;
+					policer_i->urgency_level = v8;
 					return 0;
 				}
 			}
@@ -620,6 +630,8 @@ static int f_policy_set_param_pv(base_config * conf, const char * name, const ch
 					qos2module_i->def_urgency = v8;
 				} else if(strcmp(v_name, "cherish_th") == 0) {
 					qos2module_i->def_cherish_th = v16;
+				} else if(strcmp(v_name, "ecn_th") == 0) {
+					qos2module_i->def_ecn_th = v16;
 				}
 			}
 			break;
