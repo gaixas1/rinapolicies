@@ -1,8 +1,11 @@
 ifndef IRATI_KSDIR
 IRATI_KSDIR=/root/stack/kernel
 endif
+ifndef IRATI_INDIR
+IRATI_INDIR=/root/stack/include
+endif
 
-ccflags-y = -Wtype-limits -I${IRATI_KSDIR}
+ccflags-y = -Wtype-limits -I${IRATI_KSDIR} -I${IRATI_INDIR}
 
 obj-m := rmt-be-plugin.o
 rmt-be-plugin-y := rmt-be.o

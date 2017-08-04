@@ -30,6 +30,7 @@ struct port_instance {
 // Configuration of the policy
 struct base_config {
 	uint_t max_count;
+	uint_t ecn_th;
 	struct list_head port_L;
 	struct list_head buffer_L;
 };

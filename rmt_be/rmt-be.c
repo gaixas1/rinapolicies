@@ -31,6 +31,7 @@ static struct ps_base * f_policy_create(struct rina_component * component){
 	}
 	
 	conf->max_count = 100;
+	conf->ecn_th = 50;
 	INIT_LIST_HEAD(&conf->port_L);
 	INIT_LIST_HEAD(&conf->buffer_L);
 
@@ -42,7 +43,7 @@ static struct ps_base * f_policy_create(struct rina_component * component){
 	if (rmt_cfg) {
 		policy_for_each(rmt_cfg->policy_set, conf, f_policy_base_config_apply);
 	} else {
-		LOG_WARN("Using default config (100 buffers)");
+		LOG_WARN("Using default config (100 buffers, ecn at 50)");
 	}
 
 	ps_i->rmt_q_create_policy = f_rmt_q_create_policy;
@@ -147,6 +148,8 @@ struct pdu * f_rmt_dequeue_policy(struct rmt_ps * ps_i, struct rmt_n1_port * P) 
 	struct port_instance * port_i;
 	struct pdu * PDU;
 	struct q_entry * entry_i;
+    struct pci * pci;
+	unsigned long pci_flags;
 	
 	if (!ps_i || !P) {
 		LOG_ERR("Wrong input parameters for rmt_enqueu_scheduling_policy_rx");
@@ -161,16 +164,21 @@ struct pdu * f_rmt_dequeue_policy(struct rmt_ps * ps_i, struct rmt_n1_port * P) 
 		return NULL;
 	}
 	
+	PDU = NULL;
 	if(!list_empty(&port_i->Q)) {
 		entry_i = list_first_entry(&port_i->Q, struct q_entry, L);
 		list_del(&entry_i->L);
 		PDU = entry_i->data;
 		list_add(&entry_i->L, &conf->buffer_L);
 		port_i->count--;
-		return PDU;
+	}
+	if(PDU != NULL && port_i->count > conf->ecn_th) {
+		pci = pdu_pci_get_rw(PDU);	
+		pci_flags = pci_flags_get(pci);
+		pci_flags_set(pci, pci_flags |= PDU_FLAGS_EXPLICIT_CONGESTION);
 	}
 	
-	return NULL;
+	return PDU;
 }
 
 void * f_rmt_q_create_policy(struct rmt_ps *ps_i, struct rmt_n1_port * P) {
@@ -253,6 +261,17 @@ static int f_policy_set_param_pv(struct base_config * data, const char * name, c
 		}
 		
 		data->max_count = v;
+		LOG_ERR("Set max_count as \"%d\"", v);
+		return 0;
+	}
+	if(strcmp(name, "ecn_th") == 0) {
+		if(kstrtoint(value, 10, &v)) {
+			LOG_ERR("Error parsing ecn_th value \"%s\"", value);
+			return -1;
+		}
+		
+		data->ecn_th = v;
+		LOG_ERR("Set ecn_th as \"%d\"", v);
 		return 0;
 	}
 	LOG_ERR("Unknown attribute \"%s\"", name);
