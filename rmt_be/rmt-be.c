@@ -261,7 +261,7 @@ static int f_policy_set_param_pv(struct base_config * data, const char * name, c
 		}
 		
 		data->max_count = v;
-		LOG_ERR("Set max_count as \"%d\"", v);
+		LOG_INFO("Set max_count as \"%d\"", v);
 		return 0;
 	}
 	if(strcmp(name, "ecn_th") == 0) {
@@ -271,7 +271,7 @@ static int f_policy_set_param_pv(struct base_config * data, const char * name, c
 		}
 		
 		data->ecn_th = v;
-		LOG_ERR("Set ecn_th as \"%d\"", v);
+		LOG_INFO("Set ecn_th as \"%d\"", v);
 		return 0;
 	}
 	LOG_ERR("Unknown attribute \"%s\"", name);
